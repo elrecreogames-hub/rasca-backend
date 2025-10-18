@@ -1,0 +1,16 @@
+# Archivos de entorno (NO subir)
+.env
+.env.local
+*.env
+
+# Dependencias
+node_modules/
+npm-debug.log
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Build / cache
+dist/
+build/
