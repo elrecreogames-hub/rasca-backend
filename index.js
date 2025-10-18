@@ -122,11 +122,15 @@ app.post("/actualizar-monedas", async (req, res) => {
   }
 });
 
+// 🏠 Ruta de prueba para verificar que el servidor está activo
+app.get("/", (req, res) => {
+  res.send("✅ Backend Rasca y Gana activo 🚀");
+});
+
 // 🟣 INICIO DEL SERVIDOR CON LOCAL TUNNEL
 app.listen(PORT, async () => {
   console.log(`✅ Servidor iniciado en puerto ${PORT}`);
 
-  // Crea túnel automáticamente
   const tunnel = await localtunnel({ port: PORT, subdomain: "rasca" }).catch(() => null);
 
   if (tunnel && tunnel.url) {
@@ -136,5 +140,6 @@ app.listen(PORT, async () => {
     console.log("⚠️ No se pudo crear el túnel. Revisa tu conexión o instala localtunnel.");
   }
 });
+
 
 
