@@ -16,5 +16,9 @@
     "express": "^5.1.0",
     "localtunnel": "^2.0.2",
     "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }
+
