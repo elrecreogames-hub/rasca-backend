@@ -2,7 +2,6 @@ import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
 import dotenv from "dotenv";
-import localtunnel from "localtunnel";
 
 dotenv.config();
 const app = express();
@@ -19,7 +18,7 @@ const BASE_URL = `https://${SHOP}/admin/api/${API_VERSION}`;
 // 🧩 FUNCIONES AUXILIARES
 async function getCustomerByEmail(email) {
   const res = await fetch(`${BASE_URL}/customers/search.json?query=email:${email}`, {
-    headers: { "X-Shopify-Access-Token": TOKEN }
+    headers: { "X-Shopify-Access-Token": TOKEN },
   });
   const data = await res.json();
   return data.customers?.[0] || null;
@@ -27,16 +26,16 @@ async function getCustomerByEmail(email) {
 
 async function getOrdersByCustomer(customerId) {
   const res = await fetch(`${BASE_URL}/orders.json?customer_id=${customerId}&status=any`, {
-    headers: { "X-Shopify-Access-Token": TOKEN }
+    headers: { "X-Shopify-Access-Token": TOKEN },
   });
   const data = await res.json();
   // 🟢 Solo pedidos pagados
-  return (data.orders || []).filter(o => o.financial_status === "paid");
+  return (data.orders || []).filter((o) => o.financial_status === "paid");
 }
 
 async function getCustomerMetafields(customerId) {
   const res = await fetch(`${BASE_URL}/customers/${customerId}/metafields.json`, {
-    headers: { "X-Shopify-Access-Token": TOKEN }
+    headers: { "X-Shopify-Access-Token": TOKEN },
   });
   const data = await res.json();
   return data.metafields || [];
@@ -47,11 +46,11 @@ async function updateMetafield(customerId, namespace, key, value, type = "single
     method: "POST",
     headers: {
       "X-Shopify-Access-Token": TOKEN,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      metafield: { namespace, key, value, type }
-    })
+      metafield: { namespace, key, value, type },
+    }),
   });
   return await res.json();
 }
@@ -72,7 +71,7 @@ app.post("/check-juego", async (req, res) => {
     const lastOrderId = lastOrder.id.toString();
 
     const metafields = await getCustomerMetafields(customer.id);
-    const lastPlayed = metafields.find(m => m.key === "last_played");
+    const lastPlayed = metafields.find((m) => m.key === "last_played");
 
     if (lastPlayed && lastPlayed.value === lastOrderId) {
       return res.json({ puedeJugar: false, motivo: "Ya jugó esta compra" });
@@ -96,7 +95,7 @@ app.post("/actualizar-monedas", async (req, res) => {
     if (!customer) return res.json({ ok: false, motivo: "Cliente no encontrado" });
 
     const metafields = await getCustomerMetafields(customer.id);
-    let monedasField = metafields.find(m => m.key === "coins");
+    let monedasField = metafields.find((m) => m.key === "coins");
 
     const nuevasMonedas = monedasField ? parseInt(monedasField.value) + monedas : monedas;
 
@@ -105,11 +104,11 @@ app.post("/actualizar-monedas", async (req, res) => {
         method: "PUT",
         headers: {
           "X-Shopify-Access-Token": TOKEN,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          metafield: { id: monedasField.id, value: nuevasMonedas.toString() }
-        })
+          metafield: { id: monedasField.id, value: nuevasMonedas.toString() },
+        }),
       });
     } else {
       await updateMetafield(customer.id, "custom", "coins", nuevasMonedas.toString());
@@ -127,18 +126,9 @@ app.get("/", (req, res) => {
   res.send("✅ Backend Rasca y Gana activo 🚀");
 });
 
-// 🟣 INICIO DEL SERVIDOR CON LOCAL TUNNEL
-app.listen(PORT, async () => {
+// 🟣 INICIO DEL SERVIDOR
+app.listen(PORT, () => {
   console.log(`✅ Servidor iniciado en puerto ${PORT}`);
-
-  const tunnel = await localtunnel({ port: PORT, subdomain: "rasca" }).catch(() => null);
-
-  if (tunnel && tunnel.url) {
-    console.log(`🌍 Servidor público: ${tunnel.url}`);
-    console.log("🔗 Usa esta URL en tu código de Shopify para conectar el juego.");
-  } else {
-    console.log("⚠️ No se pudo crear el túnel. Revisa tu conexión o instala localtunnel.");
-  }
 });
 
 
