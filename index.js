@@ -5,18 +5,36 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
-app.use(express.json());
-app.use(cors());
 
+// ✅ Middlewares
+app.use(express.json());
+
+// 🧩 CONFIGURACIÓN DE CORS (permitiendo Shopify)
+app.use(
+  cors({
+    origin: [
+      "https://e28zpf-2k.myshopify.com",
+      "https://admin.shopify.com",
+      /\.myshopify\.com$/,
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+    credentials: true,
+  })
+);
+
+// 🧩 VARIABLES
 const PORT = process.env.PORT || 3000;
 const SHOP = process.env.SHOPIFY_STORE_URL;
 const TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const API_VERSION = process.env.API_VERSION || "2025-01";
-
 const BASE_URL = `https://${SHOP}/admin/api/${API_VERSION}`;
 
-// 🧩 FUNCIONES AUXILIARES
+// ============================
+// 🧠 FUNCIONES AUXILIARES
+// ============================
 async function getCustomerByEmail(email) {
+  console.log("🔍 Buscando cliente:", email);
   const res = await fetch(`${BASE_URL}/customers/search.json?query=email:${email}`, {
     headers: { "X-Shopify-Access-Token": TOKEN },
   });
@@ -29,7 +47,6 @@ async function getOrdersByCustomer(customerId) {
     headers: { "X-Shopify-Access-Token": TOKEN },
   });
   const data = await res.json();
-  // 🟢 Solo pedidos pagados
   return (data.orders || []).filter((o) => o.financial_status === "paid");
 }
 
@@ -55,11 +72,13 @@ async function updateMetafield(customerId, namespace, key, value, type = "single
   return await res.json();
 }
 
-// 🟢 RUTA 1: Verificar si puede jugar
+// ============================
+// 🎮 RUTA: Verificar si puede jugar
+// ============================
 app.post("/check-juego", async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Falta el correo" });
+    if (!email) return res.status(400).json({ error: "Falta el correo electrónico" });
 
     const customer = await getCustomerByEmail(email);
     if (!customer) return res.json({ puedeJugar: false, motivo: "Cliente no encontrado" });
@@ -85,19 +104,24 @@ app.post("/check-juego", async (req, res) => {
   }
 });
 
-// 🟢 RUTA 2: Actualizar monedas
+// ============================
+// 💰 RUTA: Actualizar monedas
+// ============================
 app.post("/actualizar-monedas", async (req, res) => {
   try {
     const { email, monedas } = req.body;
-    if (!email || !monedas) return res.status(400).json({ error: "Datos incompletos" });
+    if (!email || monedas == null)
+      return res.status(400).json({ error: "Faltan datos: email o monedas" });
 
     const customer = await getCustomerByEmail(email);
     if (!customer) return res.json({ ok: false, motivo: "Cliente no encontrado" });
 
     const metafields = await getCustomerMetafields(customer.id);
-    let monedasField = metafields.find((m) => m.key === "coins");
+    let monedasField = metafields.find((m) => m.key === "monedas_acumuladas");
 
-    const nuevasMonedas = monedasField ? parseInt(monedasField.value) + monedas : monedas;
+    const nuevasMonedas = monedasField
+      ? parseInt(monedasField.value) + parseInt(monedas)
+      : parseInt(monedas);
 
     if (monedasField) {
       await fetch(`${BASE_URL}/metafields/${monedasField.id}.json`, {
@@ -111,7 +135,7 @@ app.post("/actualizar-monedas", async (req, res) => {
         }),
       });
     } else {
-      await updateMetafield(customer.id, "custom", "coins", nuevasMonedas.toString());
+      await updateMetafield(customer.id, "custom", "monedas_acumuladas", nuevasMonedas.toString());
     }
 
     res.json({ ok: true, total: nuevasMonedas });
@@ -121,15 +145,40 @@ app.post("/actualizar-monedas", async (req, res) => {
   }
 });
 
-// 🏠 Ruta de prueba para verificar que el servidor está activo
+// ============================
+// 🌐 RUTA: Consultar monedas del usuario
+// ============================
+app.post("/consultar-monedas", async (req, res) => {
+  try {
+    console.log("📩 POST /consultar-monedas", req.body);
+    const { email } = req.body;
+
+    if (!email) return res.status(400).json({ error: "Falta el correo electrónico" });
+
+    const customer = await getCustomerByEmail(email);
+    if (!customer) return res.json({ ok: false, motivo: "Cliente no encontrado" });
+
+    const metafields = await getCustomerMetafields(customer.id);
+    const monedasField = metafields.find((m) => m.key === "monedas_acumuladas");
+
+    const monedas = monedasField ? parseInt(monedasField.value) : 0;
+    res.json({ ok: true, monedas });
+  } catch (error) {
+    console.error("❌ Error en /consultar-monedas:", error);
+    res.status(500).json({ error: "Error al consultar monedas" });
+  }
+});
+
+// ============================
+// ✅ PRUEBA DE VIDA
+// ============================
 app.get("/", (req, res) => {
   res.send("✅ Backend Rasca y Gana activo 🚀");
 });
 
-// 🟣 INICIO DEL SERVIDOR
+// ============================
+// 🚀 INICIO DEL SERVIDOR
+// ============================
 app.listen(PORT, () => {
   console.log(`✅ Servidor iniciado en puerto ${PORT}`);
 });
-
-
-
