@@ -1,6 +1,7 @@
 // ==============================
-// 🎯 Backend Rasca y Gana (1 juego por compra automático)
+// 🎯 Backend Rasca y Gana — 1 juego por compra automático (v5)
 // ==============================
+
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
@@ -8,172 +9,199 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
-
-// =====================================
-// ⚙️ CONFIGURACIÓN
-// =====================================
 app.use(express.json());
 app.use(
   cors({
     origin: [
-      "https://e28zpf-2k.myshopify.com",
-      /\.myshopify\.com$/,
-      "https://admin.shopify.com",
+      "https://e28zpf-2k.myshopify.com", // 🔁 tu dominio Shopify
+      "https://admin.shopify.com"
     ],
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-    credentials: true,
   })
 );
 
-const PORT = process.env.PORT || 10000;
-const SHOP = process.env.SHOPIFY_STORE_URL;
-const TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-const API_VERSION = process.env.API_VERSION || "2025-10";
-const BASE_URL = `https://${SHOP}/admin/api/${API_VERSION}`;
+// =====================================
+// 🔐 CONFIGURACIÓN
+// =====================================
+const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // ejemplo: e28zpf-2k.myshopify.com
+const HEADERS = {
+  "Content-Type": "application/json",
+  "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+};
 
 // =====================================
-// 🔧 FUNCIONES AUXILIARES
+// 🔧 FUNCIONES BASE
 // =====================================
-async function getCustomerByEmail(email) {
-  if (!email) return null;
-  const res = await fetch(`${BASE_URL}/customers/search.json?query=email:${email}`, {
-    headers: { "X-Shopify-Access-Token": TOKEN },
-  });
+async function obtenerClientePorEmail(email) {
+  const res = await fetch(
+    `https://${SHOPIFY_STORE}/admin/api/2023-10/customers/search.json?query=email:${email}`,
+    { headers: HEADERS }
+  );
   const data = await res.json();
   return data.customers?.[0] || null;
 }
 
-async function getCustomerMetafields(customerId) {
-  const res = await fetch(`${BASE_URL}/customers/${customerId}/metafields.json`, {
-    headers: { "X-Shopify-Access-Token": TOKEN },
-  });
+async function obtenerMetafield(customerId, namespace, key) {
+  const res = await fetch(
+    `https://${SHOPIFY_STORE}/admin/api/2023-10/customers/${customerId}/metafields.json`,
+    { headers: HEADERS }
+  );
   const data = await res.json();
-  return data.metafields || [];
+  return data.metafields.find((m) => m.namespace === namespace && m.key === key);
 }
 
-async function updateMetafield(customerId, namespace, key, value, type = "single_line_text_field") {
-  const res = await fetch(`${BASE_URL}/customers/${customerId}/metafields.json`, {
-    headers: {
-      "X-Shopify-Access-Token": TOKEN,
-      "Content-Type": "application/json",
-    },
-  });
-  const data = await res.json();
-  const found = data.metafields.find(m => m.namespace === namespace && m.key === key);
-
-  if (found) {
-    await fetch(`${BASE_URL}/metafields/${found.id}.json`, {
-      method: "PUT",
-      headers: {
-        "X-Shopify-Access-Token": TOKEN,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ metafield: { id: found.id, value } }),
-    });
+async function updateMetafield(customerId, namespace, key, value, type = "json") {
+  const existing = await obtenerMetafield(customerId, namespace, key);
+  if (existing) {
+    await fetch(
+      `https://${SHOPIFY_STORE}/admin/api/2023-10/metafields/${existing.id}.json`,
+      {
+        method: "PUT",
+        headers: HEADERS,
+        body: JSON.stringify({
+          metafield: { id: existing.id, value, type },
+        }),
+      }
+    );
   } else {
-    await fetch(`${BASE_URL}/customers/${customerId}/metafields.json`, {
+    await fetch(`https://${SHOPIFY_STORE}/admin/api/2023-10/metafields.json`, {
       method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": TOKEN,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ metafield: { namespace, key, value, type } }),
+      headers: HEADERS,
+      body: JSON.stringify({
+        metafield: { namespace, key, value, type, owner_resource: "customer", owner_id: customerId },
+      }),
     });
   }
 }
 
 // =====================================
-// 🧠 LÓGICA DEL JUEGO
+// 🧩 WEBHOOK: Nueva compra → genera jugada
 // =====================================
+app.post("/webhook/order-created", async (req, res) => {
+  try {
+    const order = req.body;
+    const email = order?.email;
+    if (!email) return res.status(400).json({ ok: false, mensaje: "Orden sin email" });
 
-// 🔎 Verificar si puede jugar (1 vez por compra)
+    const customer = await obtenerClientePorEmail(email);
+    if (!customer) return res.status(404).json({ ok: false, mensaje: "Cliente no encontrado" });
+
+    // Guarda la orden como "pendiente de juego"
+    await updateMetafield(customer.id, "custom", "ultima_orden_jugable", order.id.toString());
+
+    // Mantén historial de jugadas
+    const jugadas = await obtenerMetafield(customer.id, "custom", "compras_jugadas");
+    const jugadasPrevias = jugadas?.value ? JSON.parse(jugadas.value) : [];
+    await updateMetafield(customer.id, "custom", "compras_jugadas", JSON.stringify(jugadasPrevias), "json");
+
+    console.log(`✅ Orden ${order.id} registrada para ${email}`);
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("❌ Error webhook:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// =====================================
+// 🧩 Verifica si puede jugar con la orden
+// =====================================
 app.post("/check-juego", async (req, res) => {
   try {
     const { email, orderId } = req.body;
-    const customer = await getCustomerByEmail(email);
-    if (!customer) return res.json({ puedeJugar: false, mensaje: "Cliente no encontrado" });
+    const customer = await obtenerClientePorEmail(email);
+    if (!customer) return res.json({ puedeJugar: false });
 
-    const metafields = await getCustomerMetafields(customer.id);
-    const jugadas = metafields.find(m => m.key === "compras_jugadas");
-    const jugadasPrevias = jugadas?.value ? jugadas.value.split(",") : [];
+    const jugadas = await obtenerMetafield(customer.id, "custom", "compras_jugadas");
+    const jugadasPrevias = jugadas?.value ? JSON.parse(jugadas.value) : [];
 
-    // Si ya jugó esa compra
-    if (jugadasPrevias.includes(orderId.toString())) {
-      return res.json({ puedeJugar: false, mensaje: "Ya jugaste con esta compra" });
-    }
-
-    return res.json({ puedeJugar: true });
-  } catch (error) {
-    console.error("❌ Error en /check-juego:", error);
-    res.status(500).json({ puedeJugar: false, error: "Error interno" });
+    const yaJugo = jugadasPrevias.some((j) => j.orderId === orderId);
+    res.json({ puedeJugar: !yaJugo });
+  } catch (err) {
+    console.error("Error check-juego:", err);
+    res.json({ puedeJugar: false });
   }
 });
 
-// 🎯 Registrar juego y actualizar monedas
+// =====================================
+// 🧩 Registrar jugada (una vez por orden)
+// =====================================
 app.post("/registrar-juego", async (req, res) => {
   try {
-    const { email, orderId, monedasGanadas = 0 } = req.body;
-    if (!email || !orderId)
-      return res.status(400).json({ ok: false, error: "Faltan datos" });
+    const { email, orderId, monedasGanadas } = req.body;
+    const customer = await obtenerClientePorEmail(email);
+    if (!customer) return res.json({ ok: false });
 
-    const customer = await getCustomerByEmail(email);
-    if (!customer)
-      return res.status(404).json({ ok: false, error: "Cliente no encontrado" });
+    // Recupera jugadas previas
+    const jugadas = await obtenerMetafield(customer.id, "custom", "compras_jugadas");
+    const jugadasPrevias = jugadas?.value ? JSON.parse(jugadas.value) : [];
 
-    const metafields = await getCustomerMetafields(customer.id);
-    const jugadas = metafields.find(m => m.key === "compras_jugadas");
-    const jugadasPrevias = jugadas?.value ? jugadas.value.split(",") : [];
-
-    // Si ya jugó con esa compra
-    if (jugadasPrevias.includes(orderId.toString())) {
-      return res.json({ ok: false, yaJugo: true, mensaje: "Ya jugaste con esta compra." });
+    // Evita doble registro
+    if (jugadasPrevias.some((j) => j.orderId === orderId)) {
+      return res.json({ ok: false, mensaje: "Ya jugó con esta compra" });
     }
 
-    // Registrar la compra como jugada
-    jugadasPrevias.push(orderId.toString());
-    await updateMetafield(customer.id, "custom", "compras_jugadas", jugadasPrevias.join(","), "multi_line_text_field");
+    // Agrega jugada nueva
+    jugadasPrevias.push({ orderId, monedasGanadas, fecha: new Date().toISOString() });
+    await updateMetafield(customer.id, "custom", "compras_jugadas", JSON.stringify(jugadasPrevias), "json");
 
-    // Sumar monedas
-    const monedasField = metafields.find(m => m.key === "monedas_acumuladas");
-    const total = (parseInt(monedasField?.value || 0) + parseInt(monedasGanadas)).toString();
-    await updateMetafield(customer.id, "custom", "monedas_acumuladas", total, "number_integer");
+    // Actualiza monedas totales
+    const monedas = await obtenerMetafield(customer.id, "custom", "monedas_acumuladas");
+    const saldo = monedas?.value ? parseInt(monedas.value) : 0;
+    const nuevoTotal = saldo + (monedasGanadas || 0);
+    await updateMetafield(customer.id, "custom", "monedas_acumuladas", nuevoTotal.toString(), "number_integer");
 
-    res.json({
-      ok: true,
-      yaJugo: false,
-      mensaje: `Ganaste ${monedasGanadas} monedas 🎉`,
-      monedas: parseInt(total),
-    });
-  } catch (error) {
-    console.error("❌ Error en /registrar-juego:", error);
-    res.status(500).json({ ok: false, error: "Error interno" });
+    console.log(`🎮 ${email} jugó orden ${orderId} y ganó ${monedasGanadas} monedas`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Error registrar-juego:", err);
+    res.json({ ok: false });
   }
 });
 
-// 💰 Consultar monedas
-app.post("/consultar-monedas", async (req, res) => {
+// =====================================
+// 🧩 Nueva ruta: última orden jugable
+// =====================================
+app.post("/ultima-compra", async (req, res) => {
   try {
     const { email } = req.body;
-    const customer = await getCustomerByEmail(email);
-    if (!customer) return res.json({ ok: true, monedas: 0 });
+    const cliente = await obtenerClientePorEmail(email);
+    if (!cliente) return res.json({ ok: false, mensaje: "Cliente no encontrado" });
 
-    const metafields = await getCustomerMetafields(customer.id);
-    const monedasField = metafields.find(m => m.key === "monedas_acumuladas");
-    const monedas = monedasField ? parseInt(monedasField.value) : 0;
+    const ordenJugable = await obtenerMetafield(cliente.id, "custom", "ultima_orden_jugable");
+    const jugadas = await obtenerMetafield(cliente.id, "custom", "compras_jugadas");
+    const jugadasPrevias = jugadas?.value ? JSON.parse(jugadas.value) : [];
 
-    res.json({ ok: true, monedas });
-  } catch (error) {
-    console.error("❌ Error en /consultar-monedas:", error);
-    res.status(500).json({ ok: false, error: "Error interno" });
+    const yaJugo = jugadasPrevias.some(j => j.orderId === ordenJugable?.value);
+    if (!ordenJugable?.value || yaJugo)
+      return res.json({ ok: false, mensaje: "No hay compras disponibles para jugar." });
+
+    res.json({ ok: true, orderId: ordenJugable.value });
+  } catch (err) {
+    console.error("Error ultima-compra:", err);
+    res.status(500).json({ ok: false, mensaje: "Error interno" });
   }
 });
 
-// ✅ Prueba de vida
-app.get("/", (req, res) => {
-  res.send("✅ Backend Rasca y Gana activo — 1 juego por compra automático 🚀");
+// =====================================
+// 🧩 Endpoint debug (monedas y jugadas)
+// =====================================
+app.get("/debug", async (req, res) => {
+  const { email } = req.query;
+  const customer = await obtenerClientePorEmail(email);
+  if (!customer) return res.json({ ok: false, mensaje: "Cliente no encontrado" });
+
+  const monedas = await obtenerMetafield(customer.id, "custom", "monedas_acumuladas");
+  const jugadas = await obtenerMetafield(customer.id, "custom", "compras_jugadas");
+  const ultima = await obtenerMetafield(customer.id, "custom", "ultima_orden_jugable");
+
+  res.json({
+    email,
+    monedas: monedas?.value || 0,
+    ultimaOrdenJugable: ultima?.value || null,
+    jugadas: jugadas?.value ? JSON.parse(jugadas.value) : [],
+  });
 });
 
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`✅ Servidor escuchando en puerto ${PORT}`)
-);
+// =====================================
+app.get("/", (req, res) => res.send("🎯 Backend Rasca y Gana v5 funcionando"));
+app.listen(3000, () => console.log("🚀 Servidor en puerto 3000 listo"));
